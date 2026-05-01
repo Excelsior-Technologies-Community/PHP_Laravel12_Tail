@@ -10,6 +10,8 @@ class PhpTail extends Command
                             {lines=10 : Number of lines to show}
                             {--file= : Specify a log file (default: laravel.log)}
                             {--grep= : Filter lines containing a keyword}
+                            {--level= : Filter logs by level (INFO, ERROR, DEBUG, WARNING)}
+                            {--export= : Export logs to a file path}
                             {--clear : Clear screen before output}
                             {--follow : Continuously tail the log}';
 
@@ -20,38 +22,79 @@ class PhpTail extends Command
         // Path to the log file
         $file = $this->option('file') ?? storage_path('logs/laravel.log');
 
+        // Auto-create file if missing (safe improvement)
         if (!file_exists($file)) {
-            $this->error("Log file not found: $file");
-            return 1;
+            if (!is_dir(dirname($file))) {
+                mkdir(dirname($file), 0777, true);
+            }
+            file_put_contents($file, "");
         }
 
         $lines = (int) $this->argument('lines');
 
         do {
             if ($this->option('clear')) {
-                // Clear the console
-                echo chr(27)."[H".chr(27)."[2J";
+                echo chr(27) . "[H" . chr(27) . "[2J";
             }
 
+            // Read file
             $content = file($file);
 
-            // Filter lines by keyword if provided
-            if ($keyword = $this->option('grep')) {
-                $content = array_filter($content, fn($line) => stripos($line, $keyword) !== false);
+            /*
+            |--------------------------------------------------------------------------
+            | LEVEL FILTER (NEW FEATURE)
+            |--------------------------------------------------------------------------
+            */
+            if ($level = $this->option('level')) {
+                $content = array_filter($content, function ($line) use ($level) {
+                    return stripos($line, $level) !== false;
+                });
             }
 
-            // Take last $lines lines
+            /*
+            |--------------------------------------------------------------------------
+            | GREP FILTER (EXISTING FEATURE)
+            |--------------------------------------------------------------------------
+            */
+            if ($keyword = $this->option('grep')) {
+                $content = array_filter($content, function ($line) use ($keyword) {
+                    return stripos($line, $keyword) !== false;
+                });
+            }
+
+            // Take last N lines
             $tail = array_slice($content, -$lines);
 
-            // Print lines
+            /*
+            |--------------------------------------------------------------------------
+            | EXPORT FEATURE (NEW)
+            |--------------------------------------------------------------------------
+            */
+            if ($exportPath = $this->option('export')) {
+                file_put_contents($exportPath, implode("", $tail));
+                $this->info("Logs exported to: " . $exportPath);
+            }
+
+            // Print logs
             foreach ($tail as $line) {
-                if ($keyword && stripos($line, $keyword) !== false) {
-                    // Highlight keyword in red
-                    $highlighted = str_ireplace($keyword, "\033[31m$keyword\033[0m", $line);
-                    $this->line($highlighted);
-                } else {
-                    $this->line($line);
+
+                // Highlight grep keyword in red
+                if (!empty($keyword) && stripos($line, $keyword) !== false) {
+                    $line = str_ireplace(
+                        $keyword,
+                        "\033[31m{$keyword}\033[0m",
+                        $line
+                    );
                 }
+
+                // Highlight log levels (bonus UI improvement)
+                $line = str_ireplace(
+                    ['ERROR', 'WARNING', 'INFO', 'DEBUG'],
+                    ["\033[31mERROR\033[0m", "\033[33mWARNING\033[0m", "\033[32mINFO\033[0m", "\033[36mDEBUG\033[0m"],
+                    $line
+                );
+
+                $this->line($line);
             }
 
             if ($this->option('follow')) {
